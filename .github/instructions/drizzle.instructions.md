@@ -59,6 +59,17 @@ export async function getAllGameIds(db: Database): Promise<number[]> {
 
 Seed-derived values must be reproducible across builds. Derive star ratings from a stable hash of the title (`ratingFromTitle`) — **never** `Math.random()`.
 
+## Documentation
+
+Every **exported** function in `db/` and `src/lib/` must have a TSDoc comment. See [`coding-standards.instructions.md`](coding-standards.instructions.md) for the full convention and examples. At minimum:
+
+- One-line description of what the function does.
+- `@param` tags for parameters whose purpose is not obvious from the name and type.
+- `@returns` when the return value is not clear from the return type alone.
+- For injectable-`db` helpers, always mention the `db` parameter so the testing pattern stays visible.
+
+ESLint enforces explicit parameter and return types on exported functions in these files via `@typescript-eslint/explicit-module-boundary-types`.
+
 ## Testing
 
 Unit-test transforms directly and helpers against `createTestDatabase()`. See [`unit-tests.instructions.md`](unit-tests.instructions.md).

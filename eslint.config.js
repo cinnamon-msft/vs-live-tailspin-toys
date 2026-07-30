@@ -40,4 +40,12 @@ export default [
       parser: tseslint.parser,
     },
   },
+
+  // Data-layer files: require explicit return types on exported functions
+  {
+    files: ["db/**/*.ts", "src/lib/**/*.ts"],
+    rules: {
+      "@typescript-eslint/explicit-module-boundary-types": "error",
+    },
+  },
 ];
