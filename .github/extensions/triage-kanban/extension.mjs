@@ -37,7 +37,8 @@ async function resolveRepoName(preferredRepo) {
 }
 
 async function fetchIssues(repo, limit) {
-    const output = await execGh([
+    const fields = "number,title,body,labels,updatedAt,createdAt,comments,assignees,url,state,closedAt";
+    const openOutput = await execGh([
         "issue",
         "list",
         "--repo",
@@ -47,10 +48,29 @@ async function fetchIssues(repo, limit) {
         "--limit",
         String(limit),
         "--json",
-        "number,title,body,labels,updatedAt,createdAt,comments,assignees,url",
+        fields,
     ]);
-    const parsed = JSON.parse(output);
-    return Array.isArray(parsed) ? parsed : [];
+    const closedOutput = await execGh([
+        "issue",
+        "list",
+        "--repo",
+        repo,
+        "--state",
+        "closed",
+        "--limit",
+        String(Math.max(5, Math.floor(limit / 2))),
+        "--json",
+        fields,
+    ]);
+
+    const openIssues = JSON.parse(openOutput);
+    const closedIssues = JSON.parse(closedOutput);
+    const allIssues = [...(Array.isArray(openIssues) ? openIssues : []), ...(Array.isArray(closedIssues) ? closedIssues : [])];
+    const deduped = new Map();
+    for (const issue of allIssues) {
+        deduped.set(issue.number, issue);
+    }
+    return [...deduped.values()];
 }
 
 function clipText(value, maxLength = 260) {
@@ -136,7 +156,7 @@ function calculateIssuePriority(issue, nowMs) {
     };
 }
 
-function rankIssues(issues) {
+function rankIssues(issues, manualInProgress = new Set()) {
     const nowMs = Date.now();
     const scored = issues.map((issue) => {
         const priority = calculateIssuePriority(issue, nowMs);
@@ -155,9 +175,34 @@ function rankIssues(issues) {
         return b.number - a.number;
     });
 
+    const openIssues = scored.filter((issue) => String(issue.state || "OPEN").toUpperCase() !== "CLOSED");
+    const closedIssues = scored.filter((issue) => String(issue.state || "").toUpperCase() === "CLOSED");
+    const forcedInProgress = openIssues.filter((issue) => manualInProgress.has(issue.number));
+    const openPool = openIssues.filter((issue) => !manualInProgress.has(issue.number));
+    const attentionTop = openPool.slice(0, 3);
+    const attentionNumbers = new Set(attentionTop.map((issue) => issue.number));
+    const columns = {
+        attention: [...attentionTop],
+        ready: [],
+        inProgress: [...forcedInProgress],
+        done: closedIssues,
+    };
+
+    for (const issue of openPool) {
+        if (attentionNumbers.has(issue.number)) {
+            continue;
+        }
+        const labels = (issue.labels || []).map((label) => String(label.name || "").toLowerCase());
+        if (labels.some((name) => name.includes("in progress") || name.includes("in-progress") || name.includes("doing") || name.includes("wip"))) {
+            columns.inProgress.push(issue);
+            continue;
+        }
+        columns.ready.push(issue);
+    }
+
     return {
-        top: scored.slice(0, 3),
-        backlog: scored.slice(3),
+        attentionTop,
+        columns,
         all: scored,
     };
 }
@@ -176,24 +221,43 @@ function renderIssueCard(issue, emphasize) {
     const bg = emphasize ? "var(--true-color-blue-muted, rgba(56, 139, 253, 0.12))" : "var(--background-color-default, #fff)";
     const buttonLabel = `Add issue #${issue.number} to current context`;
 
-    return `<article class="card" style="border-left-color:${border};background:${bg}">
+    return `<article class="card" data-card-issue="${issue.number}" style="border-left-color:${border};background:${bg}">
         <div class="card-head">
             <h3><a href="${escapeHtml(issue.url)}" target="_blank" rel="noopener noreferrer">#${issue.number} ${escapeHtml(issue.title)}</a></h3>
-            <span class="score">Score ${issue.score}</span>
         </div>
-        <p class="description">${escapeHtml(issue.description)}</p>
-        <p class="justification"><strong>Why this is prioritized:</strong> ${escapeHtml(issue.justification)}</p>
         <button type="button" class="context-btn" data-issue-number="${issue.number}" aria-label="${escapeHtml(buttonLabel)}">${escapeHtml(buttonLabel)}</button>
     </article>`;
 }
 
+function renderKanbanColumn(key, title, issues, options = {}) {
+    const {
+        emphasize = false,
+        emptyText = "No issues in this column.",
+    } = options;
+    const cardsHtml = issues.length > 0
+        ? issues.map((issue) => renderIssueCard(issue, emphasize)).join("\n")
+        : `<p class="empty">${escapeHtml(emptyText)}</p>`;
+
+    return `<section class="column" data-column="${escapeHtml(key)}" aria-label="${escapeHtml(title)}">
+      <div class="column-head">
+        <h2>${escapeHtml(title)}</h2>
+        <span class="count" data-column-count="${escapeHtml(key)}">${issues.length}</span>
+      </div>
+      <div class="column-cards" data-column-cards="${escapeHtml(key)}">${cardsHtml}</div>
+    </section>`;
+}
+
 function renderHtml(instanceId, repo, board) {
-    const topHtml = board.top.length > 0
-        ? board.top.map((issue) => renderIssueCard(issue, true)).join("\n")
-        : "<p class=\"empty\">No open issues found.</p>";
-    const backlogHtml = board.backlog.length > 0
-        ? board.backlog.map((issue) => renderIssueCard(issue, false)).join("\n")
-        : "<p class=\"empty\">No remaining issues.</p>";
+    const { columns } = board;
+    const columnHtml = [
+        renderKanbanColumn("attention", "Needs attention now", columns.attention, {
+            emphasize: true,
+            emptyText: "No high-priority issues right now.",
+        }),
+        renderKanbanColumn("ready", "Ready", columns.ready, { emptyText: "Nothing queued as ready yet." }),
+        renderKanbanColumn("inProgress", "In progress", columns.inProgress, { emptyText: "No issues currently in progress." }),
+        renderKanbanColumn("done", "Done", columns.done, { emptyText: "No recently closed issues pulled in." }),
+    ].join("\n");
 
     return `<!doctype html>
 <html lang="en">
@@ -226,9 +290,53 @@ function renderHtml(instanceId, repo, board) {
     }
     button:hover { filter: brightness(0.95); }
     button:focus { outline: 2px solid var(--color-focus-outline, #0969da); outline-offset: 2px; }
-    .section { margin-top: 16px; }
-    .section h2 { margin: 0 0 8px; font-size: 18px; }
-    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+    .board {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      padding-bottom: 8px;
+      align-items: start;
+    }
+    .column {
+      border: 1px solid var(--border-color-default, #d0d7de);
+      border-radius: 12px;
+      background: var(--background-color-default, #fff);
+      min-height: 240px;
+      display: flex;
+      flex-direction: column;
+    }
+    .column-head {
+      position: sticky;
+      top: 0;
+      background: var(--background-color-default, #fff);
+      border-bottom: 1px solid var(--border-color-default, #d0d7de);
+      border-radius: 12px 12px 0 0;
+      padding: 10px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .column-head h2 {
+      margin: 0;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .count {
+      border: 1px solid var(--border-color-default, #d0d7de);
+      border-radius: 999px;
+      font-size: 12px;
+      padding: 2px 8px;
+      color: var(--text-color-muted, #59636e);
+    }
+    .column-cards {
+      padding: 10px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
     .card {
       border: 1px solid var(--border-color-default, #d0d7de);
       border-left-width: 5px;
@@ -239,12 +347,9 @@ function renderHtml(instanceId, repo, board) {
       gap: 8px;
     }
     .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-    .card h3 { margin: 0; font-size: 15px; line-height: 20px; }
+    .card h3 { margin: 0; font-size: 15px; line-height: 20px; word-break: break-word; }
     .card a { color: inherit; text-decoration: none; }
     .card a:hover { text-decoration: underline; }
-    .score { color: var(--text-color-muted, #59636e); font-size: 12px; white-space: nowrap; }
-    .description, .justification { margin: 0; }
-    .justification { color: var(--text-color-muted, #59636e); }
     .context-btn { align-self: flex-start; margin-top: auto; }
     .status { margin-top: 12px; min-height: 20px; color: var(--text-color-muted, #59636e); }
     .status.error { color: var(--true-color-red, #d1242f); }
@@ -257,22 +362,12 @@ function renderHtml(instanceId, repo, board) {
       <h1>Issue triage board</h1>
       <p class="subtitle">Session instance: <code>${escapeHtml(instanceId)}</code> · Repo: <code>${escapeHtml(repo)}</code></p>
     </div>
-    <button type="button" id="refresh-board">Refresh ranking</button>
+    <button type="button" id="refresh-board">Refresh board</button>
   </header>
 
-  <section class="section" aria-label="Top priorities">
-    <h2>Needs attention now (Top 3)</h2>
-    <div class="cards">
-      ${topHtml}
-    </div>
-  </section>
-
-  <section class="section" aria-label="Remaining issues">
-    <h2>Everything else</h2>
-    <div class="cards">
-      ${backlogHtml}
-    </div>
-  </section>
+  <div class="board" role="region" aria-label="Issue kanban board">
+    ${columnHtml}
+  </div>
 
   <p id="status" class="status" role="status" aria-live="polite"></p>
 
@@ -298,10 +393,33 @@ function renderHtml(instanceId, repo, board) {
       statusEl.textContent = "Adding issue #" + issueNumber + " to current context...";
       try {
         await postJson("/api/add-context", { issueNumber });
+        moveCardToInProgress(issueNumber);
+        refreshColumnCounts();
         statusEl.textContent = "Issue #" + issueNumber + " was added to the current session context.";
       } catch (error) {
         statusEl.classList.add("error");
         statusEl.textContent = "Could not add issue #" + issueNumber + ": " + (error.message || "Unknown error");
+      }
+    }
+
+    function moveCardToInProgress(issueNumber) {
+      const card = document.querySelector('[data-card-issue="' + issueNumber + '"]');
+      const target = document.querySelector('[data-column-cards="inProgress"]');
+      if (!card || !target) {
+        return;
+      }
+      target.prepend(card);
+    }
+
+    function refreshColumnCounts() {
+      const columns = ["attention", "ready", "inProgress", "done"];
+      for (const key of columns) {
+        const container = document.querySelector('[data-column-cards="' + key + '"]');
+        const count = document.querySelector('[data-column-count="' + key + '"]');
+        if (!container || !count) {
+          continue;
+        }
+        count.textContent = String(container.querySelectorAll(".card").length);
       }
     }
 
@@ -333,9 +451,9 @@ async function readRequestJson(req) {
     return raw ? JSON.parse(raw) : {};
 }
 
-async function buildBoard(repo, limit) {
+async function buildBoard(repo, limit, manualInProgress) {
     const issues = await fetchIssues(repo, limit);
-    return rankIssues(issues);
+    return rankIssues(issues, manualInProgress);
 }
 
 async function sendIssueToSession(repo, issue) {
@@ -357,6 +475,7 @@ async function startServer(instanceId, repo, limit) {
     const state = {
         repo,
         limit,
+        manualInProgress: new Set(),
         board: { top: [], backlog: [], all: [] },
     };
 
@@ -364,7 +483,7 @@ async function startServer(instanceId, repo, limit) {
         try {
             const requestUrl = new URL(req.url || "/", "http://127.0.0.1");
             if (req.method === "GET" && requestUrl.pathname === "/") {
-                state.board = await buildBoard(state.repo, state.limit);
+                state.board = await buildBoard(state.repo, state.limit, state.manualInProgress);
                 res.statusCode = 200;
                 res.setHeader("Content-Type", "text/html; charset=utf-8");
                 res.end(renderHtml(instanceId, state.repo, state.board));
@@ -382,7 +501,7 @@ async function startServer(instanceId, repo, limit) {
                 }
 
                 if (state.board.all.length === 0) {
-                    state.board = await buildBoard(state.repo, state.limit);
+                    state.board = await buildBoard(state.repo, state.limit, state.manualInProgress);
                 }
                 const issue = state.board.all.find((entry) => entry.number === issueNumber);
                 if (!issue) {
@@ -393,9 +512,11 @@ async function startServer(instanceId, repo, limit) {
                 }
 
                 await sendIssueToSession(state.repo, issue);
+                state.manualInProgress.add(issueNumber);
+                state.board = await buildBoard(state.repo, state.limit, state.manualInProgress);
                 res.statusCode = 200;
                 res.setHeader("Content-Type", "application/json; charset=utf-8");
-                res.end(JSON.stringify({ ok: true }));
+                res.end(JSON.stringify({ ok: true, issueNumber }));
                 return;
             }
 
@@ -438,11 +559,17 @@ session = await joinSession({
                         if (!entry) {
                             throw new CanvasError("canvas_not_open", "Canvas instance is not open.");
                         }
-                        entry.state.board = await buildBoard(entry.state.repo, entry.state.limit);
+                        entry.state.board = await buildBoard(
+                            entry.state.repo,
+                            entry.state.limit,
+                            entry.state.manualInProgress,
+                        );
                         return {
                             repo: entry.state.repo,
-                            top: entry.state.board.top,
-                            remainingCount: entry.state.board.backlog.length,
+                            top: entry.state.board.attentionTop,
+                            columnCounts: Object.fromEntries(
+                                Object.entries(entry.state.board.columns).map(([key, value]) => [key, value.length]),
+                            ),
                         };
                     },
                 },
@@ -463,13 +590,23 @@ session = await joinSession({
                             throw new CanvasError("canvas_not_open", "Canvas instance is not open.");
                         }
                         if (entry.state.board.all.length === 0) {
-                            entry.state.board = await buildBoard(entry.state.repo, entry.state.limit);
+                            entry.state.board = await buildBoard(
+                                entry.state.repo,
+                                entry.state.limit,
+                                entry.state.manualInProgress,
+                            );
                         }
                         const issue = entry.state.board.all.find((candidate) => candidate.number === Number(ctx.input.issueNumber));
                         if (!issue) {
                             throw new CanvasError("issue_not_found", `Issue #${ctx.input.issueNumber} is not present in the board.`);
                         }
                         await sendIssueToSession(entry.state.repo, issue);
+                        entry.state.manualInProgress.add(issue.number);
+                        entry.state.board = await buildBoard(
+                            entry.state.repo,
+                            entry.state.limit,
+                            entry.state.manualInProgress,
+                        );
                         return { ok: true, issueNumber: issue.number };
                     },
                 },
@@ -485,12 +622,12 @@ session = await joinSession({
                 } else {
                     entry.state.repo = repo;
                     entry.state.limit = limit;
-                    entry.state.board = await buildBoard(repo, limit);
+                    entry.state.board = await buildBoard(repo, limit, entry.state.manualInProgress);
                 }
 
                 return {
                     title: "Issue triage board",
-                    status: "Top 3 prioritized issues",
+                    status: "Kanban board with triage columns",
                     url: entry.url,
                 };
             },
