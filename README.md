@@ -12,6 +12,18 @@ Tailspin Toys is a crowdfunding platform for games with a developer theme. The p
 
 The database is migrated and seeded automatically before `dev`/`build` (via the `predev`/`prebuild` npm scripts) and is written to `.data/` (gitignored).
 
+## Filtering Games
+
+The homepage lets visitors narrow the game catalog by **category** and **publisher**:
+
+- **Category**: Multi-select checkboxes let you filter by one or more categories at once.
+- **Publisher**: A single-select dropdown filters to games from a specific publisher.
+- Filters combine with AND semantics — only games matching all active filters are shown.
+- A **Clear filters** button appears whenever a filter is active and resets both controls.
+- A live status line ("Showing X of Y games") keeps screen-reader users informed of the current result count.
+
+Filter controls follow the project's accessibility guidelines: semantic `<fieldset>`/`<legend>` for the checkbox group, `<label>` associations, ARIA live region for status, visible focus rings, and full keyboard support.
+
 ## Using this template
 
 This repository is a GitHub template. When you create a new repository from it, a one-time **Bootstrap template issues** workflow (`.github/workflows/bootstrap-issues.yml`) runs automatically on the first push to `main` and opens a set of starter issues describing suggested first features. Each issue is defined by a Markdown file in `.github/bootstrap-issues/` — the first heading becomes the issue title and the remaining content becomes the body — so you can edit, add, or remove files there to control which issues are created.
