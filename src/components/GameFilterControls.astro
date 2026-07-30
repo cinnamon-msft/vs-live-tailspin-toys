@@ -1,0 +1,166 @@
+---
+import type { Category, Publisher } from '../types/game';
+
+/**
+ * Accessible filter panel for narrowing the games list by category and publisher.
+ * Renders category checkboxes (multi-select) and a publisher dropdown (single-select).
+ * Filtering is driven by a client-side script that reads data attributes on game cards.
+ */
+interface Props {
+    /** All available categories, used to populate the checkbox group. */
+    categories: Category[];
+    /** All available publishers, used to populate the dropdown. */
+    publishers: Publisher[];
+}
+
+const { categories, publishers } = Astro.props;
+---
+
+<aside
+    class="bg-slate-800/60 backdrop-blur-sm rounded-xl border border-slate-700/50 p-5 mb-6"
+    aria-label="Filter games"
+    data-testid="filter-panel"
+>
+    <div class="flex flex-col sm:flex-row gap-6">
+        <!-- Category filter: multi-select checkboxes -->
+        <fieldset class="flex-1">
+            <legend class="text-sm font-semibold text-slate-200 mb-3 uppercase tracking-wide">
+                Filter by Category
+            </legend>
+            <div class="flex flex-wrap gap-x-4 gap-y-2" data-testid="category-filter-group">
+                {categories.map((category) => (
+                    <label
+                        class="flex items-center gap-2 text-slate-300 text-sm cursor-pointer hover:text-slate-100 transition-colors"
+                        data-testid={`category-label-${category.id}`}
+                    >
+                        <input
+                            type="checkbox"
+                            name="category"
+                            value={String(category.id)}
+                            class="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 focus:outline-none accent-blue-500 cursor-pointer"
+                            data-testid={`category-checkbox-${category.id}`}
+                            aria-label={`Filter by ${category.name}`}
+                        />
+                        {category.name}
+                    </label>
+                ))}
+            </div>
+        </fieldset>
+
+        <!-- Publisher filter: single-select dropdown -->
+        <div class="sm:w-56">
+            <label
+                for="publisher-filter"
+                class="block text-sm font-semibold text-slate-200 mb-3 uppercase tracking-wide"
+            >
+                Filter by Publisher
+            </label>
+            <select
+                id="publisher-filter"
+                name="publisher"
+                class="w-full bg-slate-700 border border-slate-600 text-slate-200 text-sm rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:outline-none hover:border-slate-500 transition-colors cursor-pointer"
+                data-testid="publisher-filter-select"
+                aria-label="Filter games by publisher"
+            >
+                <option value="">All Publishers</option>
+                {publishers.map((publisher) => (
+                    <option value={String(publisher.id)}>{publisher.name}</option>
+                ))}
+            </select>
+        </div>
+
+        <!-- Reset button: only visible when a filter is active -->
+        <div class="flex items-end">
+            <button
+                id="reset-filters"
+                type="button"
+                class="hidden text-sm text-slate-400 hover:text-slate-200 underline underline-offset-2 focus:ring-2 focus:ring-blue-500 focus:outline-none rounded transition-colors pb-2"
+                data-testid="reset-filters-button"
+                aria-label="Clear all filters"
+            >
+                Clear filters
+            </button>
+        </div>
+    </div>
+
+    <!-- Live filter result count for screen readers and sighted users -->
+    <p
+        id="filter-status"
+        class="mt-3 text-xs text-slate-400 hidden"
+        role="status"
+        aria-live="polite"
+        data-testid="filter-status"
+    ></p>
+</aside>
+
+<script>
+    const filterPanel = document.querySelector('[data-testid="filter-panel"]');
+    const gamesGrid = document.querySelector<HTMLElement>('[data-testid="games-grid"]');
+    const filterStatus = document.getElementById('filter-status');
+    const resetButton = document.getElementById('reset-filters') as HTMLButtonElement | null;
+    const emptyContainer = document.getElementById('filtered-empty-state');
+
+    function getActiveFilters(): { categoryIds: Set<string>; publisherId: string } {
+        const checked = filterPanel?.querySelectorAll<HTMLInputElement>('input[name="category"]:checked');
+        const categoryIds = new Set(Array.from(checked ?? []).map((el) => el.value));
+        const publisherSelect = filterPanel?.querySelector<HTMLSelectElement>('select[name="publisher"]');
+        return { categoryIds, publisherId: publisherSelect?.value ?? '' };
+    }
+
+    function applyFilters(): void {
+        const { categoryIds, publisherId } = getActiveFilters();
+        const hasFilter = categoryIds.size > 0 || publisherId !== '';
+
+        const cards = gamesGrid?.querySelectorAll<HTMLElement>('[data-testid="game-card"]') ?? [];
+        let visibleCount = 0;
+
+        for (const card of cards) {
+            const cardCategory = card.dataset.categoryId ?? '';
+            const cardPublisher = card.dataset.publisherId ?? '';
+
+            const categoryMatch = categoryIds.size === 0 || categoryIds.has(cardCategory);
+            const publisherMatch = publisherId === '' || publisherId === cardPublisher;
+            const visible = categoryMatch && publisherMatch;
+
+            card.style.display = visible ? '' : 'none';
+            if (visible) visibleCount++;
+        }
+
+        // Show/hide the "no results" empty state
+        if (emptyContainer) {
+            emptyContainer.style.display = visibleCount === 0 && hasFilter ? '' : 'none';
+        }
+
+        // Update filter status for screen readers
+        if (filterStatus) {
+            if (hasFilter) {
+                filterStatus.textContent = `Showing ${visibleCount} of ${cards.length} games`;
+                filterStatus.classList.remove('hidden');
+            } else {
+                filterStatus.textContent = '';
+                filterStatus.classList.add('hidden');
+            }
+        }
+
+        // Show or hide the reset button
+        if (resetButton) {
+            resetButton.classList.toggle('hidden', !hasFilter);
+        }
+    }
+
+    function resetFilters(): void {
+        filterPanel?.querySelectorAll<HTMLInputElement>('input[name="category"]').forEach((cb) => {
+            cb.checked = false;
+        });
+        const publisherSelect = filterPanel?.querySelector<HTMLSelectElement>('select[name="publisher"]');
+        if (publisherSelect) publisherSelect.value = '';
+        applyFilters();
+    }
+
+    // Attach change listeners
+    filterPanel?.querySelectorAll<HTMLInputElement>('input[name="category"]').forEach((cb) => {
+        cb.addEventListener('change', applyFilters);
+    });
+    filterPanel?.querySelector<HTMLSelectElement>('select[name="publisher"]')?.addEventListener('change', applyFilters);
+    resetButton?.addEventListener('click', resetFilters);
+</script>
