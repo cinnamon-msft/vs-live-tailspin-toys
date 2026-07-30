@@ -76,7 +76,7 @@ describe('games data-access helpers', () => {
     let db: Database;
 
     beforeEach(async () => {
-        db = await createTestDatabase();
+        db = createTestDatabase();
     });
 
     it('returns all games ordered by title', async () => {
@@ -111,7 +111,7 @@ describe('getFilteredGames', () => {
     let db: Database;
 
     beforeEach(async () => {
-        db = await createTestDatabase();
+        db = createTestDatabase();
     });
 
     it('returns all games when no filters are supplied', async () => {
@@ -175,7 +175,7 @@ describe('getAllCategories', () => {
     let db: Database;
 
     beforeEach(async () => {
-        db = await createTestDatabase();
+        db = createTestDatabase();
     });
 
     it('returns all categories ordered by name', async () => {
@@ -197,7 +197,7 @@ describe('getAllPublishers', () => {
     let db: Database;
 
     beforeEach(async () => {
-        db = await createTestDatabase();
+        db = createTestDatabase();
     });
 
     it('returns all publishers ordered by name', async () => {
